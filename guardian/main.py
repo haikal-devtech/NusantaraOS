@@ -2,16 +2,24 @@
 
 # =============================================
 # NusantaraOS - System Guardian Daemon
-# Dibuat oleh: haikal-devtech
-# Ini adalah "jantung" dari NusantaraOS
-# Daemon ini yang jaga sistem tetap sehat
+# Ini "jantung" NusantaraOS — semua modul
+# dikontrol dari sini
 # =============================================
 
 import time
 import logging
+from boot_watcher import cek_boot, reset_counter
+from hardware_watcher import deteksi_gpu
+from health_monitor import laporan_sehat
+from notification_dispatcher import (
+    notif_sistem_sehat,
+    notif_disk_hampir_penuh,
+    notif_disk_kritis,
+    notif_ram_penuh,
+    notif_gpu_fallback
+)
 
-# --- Setup logging ---
-# Biar kita bisa liat apa yang daemon lagi lakuin
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
@@ -23,25 +31,45 @@ logging.basicConfig(
 
 log = logging.getLogger(__name__)
 
-# --- Fungsi utama ---
-def main():
-    log.info("Halo! Guardian NusantaraOS mulai jalan...")
-    log.info("Lagi nyiapin semua modul, tunggu ya...")
+# Seberapa sering Guardian cek kesehatan sistem
+# 300 detik = 5 menit
+INTERVAL_CEK = 300
 
-    # TODO: nanti modul-modul ini akan dipanggil di sini
-    # boot_watcher.start()       <-- jaga kalau sistem gagal boot
-    # hardware_watcher.start()   <-- deteksi GPU dan hardware lain
-    # health_monitor.start()     <-- pantau kesehatan sistem
-    # notification_dispatcher.start() <-- kirim notifikasi ke user
+def jalankan_guardian():
+    log.info("=" * 50)
+    log.info("NUSANTARA OS — GUARDIAN DAEMON AKTIF")
+    log.info("Sistem kamu sedang dipantau")
+    log.info("=" * 50)
 
-    log.info("Semua siap! Guardian aktif, sistem lagi dipantau.")
-    log.info("Guardian akan terus jalan di background...")
+    # 1. Cek boot — aman atau perlu rollback?
+    log.info("Langkah 1: Cek status boot...")
+    cek_boot()
 
-    # Loop utama - daemon terus jalan selama sistem hidup
+    # 2. Deteksi GPU
+    log.info("Langkah 2: Deteksi hardware...")
+    gpu = deteksi_gpu()
+    if gpu == 'unknown' or gpu is None:
+        log.warning("GPU tidak dikenal — aktifkan llvmpipe")
+        notif_gpu_fallback()
+
+    # 3. Boot berhasil — reset counter
+    log.info("Langkah 3: Boot sukses, reset counter...")
+    reset_counter()
+
+    # 4. Loop utama — cek kesehatan tiap 5 menit
+    log.info("Langkah 4: Mulai loop pemantauan...")
+    log.info(f"Sistem akan dicek setiap {INTERVAL_CEK // 60} menit")
+    log.info("=" * 50)
+
     while True:
-        # nanti di sini kita panggil semua modul secara berkala
-        time.sleep(60) # istirahat 60 detik, terus cek lagi
+        log.info("Menjalankan Sehat Check...")
+        semua_aman = laporan_sehat()
 
-# --- Jalanin programnya ---
+        if semua_aman:
+            notif_sistem_sehat()
+
+        log.info(f"Istirahat {INTERVAL_CEK // 60} menit, lalu cek lagi...")
+        time.sleep(INTERVAL_CEK)
+
 if __name__ == "__main__":
-    main()
+    jalankan_guardian()
