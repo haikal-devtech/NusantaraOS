@@ -24,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
     handlers=[
-        logging.FileHandler('/tmp/nusantara-guardian.log'),
+        logging.FileHandler('/var/log/nusantara/guardian.log'),
         logging.StreamHandler()
     ]
 )
