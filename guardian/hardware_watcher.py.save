@@ -4,6 +4,7 @@
 # NusantaraOS - Hardware Watcher
 # Tugasnya: deteksi GPU yang ada di sistem
 # Nanti ini yang otomatis load driver yang bener
+# Masih tahap awal - baru bisa deteksi dulu
 # =============================================
 
 import subprocess
@@ -12,10 +13,22 @@ import logging
 log = logging.getLogger(__name__)
 
 def deteksi_gpu():
+    """
+    Fungsi ini cari tau GPU apa yang kepasang di sistem.
+    Caranya pake perintah 'lspci' yang baca info hardware.
+    """
+
     log.info("Lagi ngecek GPU yang ada di sistem...")
 
     try:
-        hasil = subprocess.run(['lspci'], capture_output=True, text=True)
+        # Jalanin perintah lspci di terminal, ambil hasilnya
+        hasil = subprocess.run(
+            ['lspci'],
+            capture_output=True,
+            text=True
+        )
+
+        # Pisahin per baris, cari yang ada kata 'VGA' atau 'Display'
         semua_hardware = hasil.stdout.split('\n')
         gpu_ditemukan = []
 
@@ -23,31 +36,37 @@ def deteksi_gpu():
             if 'VGA' in hardware or 'Display' in hardware or '3D' in hardware:
                 gpu_ditemukan.append(hardware)
 
+        # Kalau ketemu GPU nya
         if gpu_ditemukan:
             for gpu in gpu_ditemukan:
                 log.info(f"GPU ditemukan: {gpu}")
-                gpu_upper = gpu.upper()
 
-                if 'NVIDIA' in gpu_upper:
+                # Cek GPU dari vendor mana
+                if 'NVIDIA' in gpu.upper():
                     log.info("Vendor: NVIDIA — perlu driver khusus")
                     return 'nvidia'
-                elif 'INTEL' in gpu_upper:
-                    log.info("Vendor: Intel — pakai driver iris/xe")
-                    return 'intel'
-                elif 'AMD' in gpu_upper or 'ATI' in gpu_upper:
+
+                elif 'AMD' in gpu.upper() or 'ATI' in gpu.upper():
                     log.info("Vendor: AMD — pakai driver amdgpu")
                     return 'amd'
+
+                elif 'INTEL' in gpu.upper():
+                    log.info("Vendor: Intel — pakai driver iris/xe")
+                    return 'intel'
+
                 else:
-                    log.info("Vendor: Tidak dikenal — pakai llvmpipe")
+                    log.info("Vendor: Tidak dikenal — akan pakai llvmpipe")
                     return 'unknown'
         else:
-            log.warning("Gak ada GPU yang ketemu!")
+            log.warning("Waduh, gak ada GPU yang ketemu!")
             return None
-
     except Exception as e:
+        # Kalau ada error, catat dan lanjut
         log.error(f"Error waktu deteksi GPU: {e}")
         return None
 
+
+# --- Test langsung kalau file ini dijalanin sendiri ---
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
     log.info("Test Hardware Watcher...")
