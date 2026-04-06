@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "bahasa": "Bahasa Indonesia",
+    "versi": "1.0",
+    "author": "haikal-devtech"
+  },
+
+  "guardian": {
+    "mulai": "Guardian NusantaraOS mulai jalan...",
+    "aktif": "Sistem kamu sedang dipantau.",
+    "berhenti": "Guardian berhenti."
+  },
+
+  "boot": {
+    "pertama": "Boot pertama — semua aman.",
+    "gagal_peringatan": "Sistem gagal boot {n}x — memantau situasi.",
+    "gagal_kritis": "Sistem gagal boot {n}x berturut-turut — memulai pemulihan otomatis.",
+    "sukses": "Boot berhasil! Sistem berjalan normal.",
+    "rollback_mulai": "Memulai pemulihan sistem ke kondisi sebelumnya...",
+    "rollback_selesai": "Sistem berhasil dipulihkan. Data kamu aman.",
+    "home_aman": "Folder pribadi kamu tidak terpengaruh."
+  },
+
+  "hardware": {
+    "deteksi_mulai": "Mendeteksi perangkat keras...",
+    "gpu_intel": "GPU Intel ditemukan — menggunakan driver iris.",
+    "gpu_amd": "GPU AMD ditemukan — menggunakan driver amdgpu.",
+    "gpu_nvidia": "GPU NVIDIA ditemukan — driver khusus diperlukan.",
+    "gpu_tidak_dikenal": "GPU tidak dikenal — menggunakan mode cadangan.",
+    "driver_berhasil": "Driver berhasil dimuat.",
+    "driver_gagal": "Driver gagal dimuat — beralih ke mode cadangan.",
+    "llvmpipe_aktif": "Mode cadangan aktif. Performa grafis mungkin berkurang.",
+    "gpu_ganti_terdeteksi": "GPU baru terdeteksi! Memulai wizard pemasangan driver."
+  },
+
+  "sehat": {
+    "mulai": "Menjalankan pemeriksaan kesehatan sistem...",
+    "semua_aman": "Sistem kamu sehat — tidak ada masalah ditemukan.",
+    "disk_aman": "Penyimpanan aman.",
+    "disk_peringatan": "Penyimpanan sudah {persen}% terpakai — mulai bersihkan file yang tidak perlu.",
+    "disk_kritis": "Penyimpanan hampir penuh ({persen}%)! Segera hapus file yang tidak perlu.",
+    "ram_aman": "Memori aman — {persen}% terpakai.",
+    "ram_peringatan": "Memori mulai banyak terpakai ({persen}%) — coba tutup beberapa aplikasi.",
+    "ram_kritis": "Memori hampir habis! Tutup aplikasi yang tidak dipakai.",
+    "layanan_aman": "Semua layanan sistem berjalan normal.",
+    "layanan_bermasalah": "Ada {n} layanan yang bermasalah — klik untuk memperbaiki."
+  },
+
+  "notifikasi": {
+    "sistem_sehat": "Sistem Kamu Sehat",
+    "sistem_sehat_isi": "Tidak ada masalah ditemukan. Guardian terus memantau.",
+    "disk_peringatan": "Penyimpanan Hampir Penuh",
+    "disk_peringatan_isi": "Disk sudah {persen}% terpakai. Mulai bersihkan file yang tidak perlu.",
+    "disk_kritis": "Penyimpanan Kritis!",
+    "disk_kritis_isi": "Disk sudah {persen}% terpakai. Sistem bisa terganggu kalau tidak segera dibersihkan.",
+    "ram_penuh": "Memori Hampir Habis",
+    "ram_penuh_isi": "RAM hampir penuh. Coba tutup beberapa aplikasi yang tidak dipakai.",
+    "gpu_fallback": "Driver GPU Bermasalah",
+    "gpu_fallback_isi": "NusantaraOS memakai mode cadangan. Klik untuk memperbaiki driver.",
+    "pemulihan_berhasil": "Sistem Berhasil Dipulihkan",
+    "pemulihan_berhasil_isi": "Sistem sempat bermasalah tapi sudah dipulihkan otomatis. Data kamu aman.",
+    "pembaruan_tersedia": "Pembaruan Tersedia",
+    "pembaruan_tersedia_isi": "Ada {n} pembaruan yang siap dipasang."
+  },
+
+  "installer": {
+    "selamat_datang": "Selamat datang di NusantaraOS!",
+    "mulai_instalasi": "Mulai Instalasi",
+    "pilih_partisi": "Pilih Partisi",
+    "otomatis": "Otomatis (Disarankan)",
+    "manual": "Manual",
+    "zona_waktu": "Pilih Zona Waktu",
+    "wib": "WIB — Waktu Indonesia Barat",
+    "wita": "WITA — Waktu Indonesia Tengah",
+    "wit": "WIT — Waktu Indonesia Timur",
+    "buat_akun": "Buat Akun Kamu",
+    "nama_pengguna": "Nama Pengguna",
+    "kata_sandi": "Kata Sandi",
+    "instalasi_selesai": "Instalasi selesai! NusantaraOS siap digunakan.",
+    "mulai_ulang": "Mulai Ulang Sekarang"
+  }
+}
