@@ -135,8 +135,12 @@ class GuardianTrayIcon(QSystemTrayIcon):
         super().__init__()
         self._app = app
         self._status = "unknown"
-        self._sehat_win  = None
-        self._driver_win = None
+        self._sehat_win   = None
+        self._driver_win  = None
+        self._welcome_win = None
+
+        # Tampilkan Welcome Screen jika belum pernah di-dismiss
+        self._maybe_show_welcome()
 
         # Setup awal
         self._update_status()
@@ -186,8 +190,9 @@ class GuardianTrayIcon(QSystemTrayIcon):
         menu.addSeparator()
 
         # Aksi utama
-        sehat_action  = menu.addAction("❤  Sehat Check")
-        driver_action = menu.addAction("🔧  Manajer Driver")
+        sehat_action   = menu.addAction("❤  Sehat Check")
+        driver_action  = menu.addAction("🔧  Manajer Driver")
+        welcome_action = menu.addAction("🏠  Halaman Sambutan")
         menu.addSeparator()
 
         # Status saat ini
@@ -201,6 +206,7 @@ class GuardianTrayIcon(QSystemTrayIcon):
         # Connect
         sehat_action.triggered.connect(self._open_sehat_check)
         driver_action.triggered.connect(self._open_driver_manager)
+        welcome_action.triggered.connect(self._open_welcome)
         quit_action.triggered.connect(self._quit)
 
         self.setContextMenu(menu)
@@ -233,6 +239,30 @@ class GuardianTrayIcon(QSystemTrayIcon):
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._open_sehat_check()
+
+    def _maybe_show_welcome(self):
+        """Tampilkan Welcome Screen sekali saat login pertama."""
+        try:
+            from welcome_screen import should_show_welcome, WelcomeWindow
+            if should_show_welcome():
+                self._welcome_win = WelcomeWindow()
+                self._welcome_win.show()
+        except ImportError:
+            pass
+
+    def _open_welcome(self):
+        """Buka Welcome Screen manual dari tray menu — bypass flag."""
+        try:
+            from welcome_screen import WelcomeWindow
+            if self._welcome_win is None or not self._welcome_win.isVisible():
+                self._welcome_win = WelcomeWindow()
+                self._welcome_win.show()
+            else:
+                self._welcome_win.raise_()
+                self._welcome_win.activateWindow()
+        except ImportError as e:
+            self.showMessage("Error", f"Tidak bisa membuka Welcome Screen:\n{e}",
+                             QSystemTrayIcon.MessageIcon.Critical, 3000)
 
     def _open_sehat_check(self):
         try:
