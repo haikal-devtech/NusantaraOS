@@ -1,27 +1,24 @@
 [Unit]
 Description=NusantaraOS Hardware Detection (GPU Auto-Config)
-Documentation=https://github.com/haikal-devtech/nusantara-os
-# Jalankan sebelum display manager — PRD 5.2 requirement
-# "Run hw-detect service before display manager starts (systemd ordering: After=basic.target)"
-After=basic.target
-Before=display-manager.service
+Documentation=https://github.com/haikal-devtech/NusantaraOS
+# Jalan sebelum display manager — PRD 5.2
+# DefaultDependencies=no agar tidak inherit After=sysinit.target dll
+# yang bisa bikin cycle dengan display-manager
 DefaultDependencies=no
+After=sysinit.target
+Before=display-manager.service
+Before=graphical.target
 
 [Service]
 Type=oneshot
-# Jalankan satu kali saat boot, tidak perlu restart
 RemainAfterExit=yes
 User=root
 Group=root
-
 ExecStart=/bin/bash /usr/lib/nusantara/gpu-automation/hw-detect.sh
-
-# Timeout — PRD 5.2: fallback dalam < 30 detik
 TimeoutStartSec=30
-
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nusantara-hw-detect
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target

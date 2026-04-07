@@ -1,45 +1,33 @@
 [Unit]
 Description=NusantaraOS System Guardian Daemon
-Documentation=https://github.com/haikal-devtech/nusantara-os
-# Jalan setelah network dan basic system target
-After=network.target graphical.target
-# Kalau hw-detect selesai dulu, lebih baik
-After=nusantara-hw-detect.service
-Wants=nusantara-hw-detect.service
+Documentation=https://github.com/haikal-devtech/NusantaraOS
+# Jalan setelah multi-user.target — tidak After=graphical.target
+# karena itu yang bikin ordering cycle dengan display-manager/hw-detect
+After=multi-user.target
 
 [Service]
 Type=simple
-# Jalankan sebagai root — perlu untuk akses /var/lib, /var/log, lsmod, smartctl
 User=root
 Group=root
-
-# Working directory = folder guardian/
 WorkingDirectory=/usr/lib/nusantara/guardian
-
-# Perintah utama
 ExecStart=/usr/bin/python3 /usr/lib/nusantara/guardian/main.py
 
-# Restart otomatis kalau crash — PRD 5.3 requirement
+# Restart otomatis kalau crash — PRD 5.3
 Restart=on-failure
 RestartSec=5
 
-# Batas resource — PRD 5.3: < 50MB RAM, < 1% CPU saat idle
+# Resource limit sesuai PRD 5.3: <50MB RAM, CPU idle
 MemoryMax=50M
 CPUQuota=10%
 
-# Environment
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 
-# Logging ke journald otomatis
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nusantara-guardian
 
-# Keamanan dasar
 NoNewPrivileges=true
-ProtectHome=read-only
-ProtectSystem=no
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
