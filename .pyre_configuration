@@ -1,0 +1,9 @@
+{
+  "source_directories": [
+    "guardian",
+    "."
+  ],
+  "exclude": [
+    ".*/__pycache__/.*"
+  ]
+}

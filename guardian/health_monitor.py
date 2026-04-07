@@ -14,8 +14,22 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-HEALTH_STATE_PATH = Path("/var/lib/nusantara/health-state.json")
-HW_STATE_PATH     = Path("/var/lib/nusantara/hw-state.json")
+# Baca path dari config kalau tersedia
+try:
+    from config import get_config
+    _cfg = get_config()
+    HEALTH_STATE_PATH = _cfg.state_dir / "health-state.json"
+    HW_STATE_PATH     = _cfg.state_dir / "hw-state.json"
+except ImportError:
+    HEALTH_STATE_PATH = Path("/var/lib/nusantara/health-state.json")
+    HW_STATE_PATH     = Path("/var/lib/nusantara/hw-state.json")
+
+# Import S.M.A.R.T monitor (optional — graceful degradation)
+try:
+    from smart_monitor import cek_smart, status_smart_overall
+    _SMART_AVAILABLE = True
+except ImportError:
+    _SMART_AVAILABLE = False
 
 
 def cek_disk():
@@ -133,21 +147,21 @@ def cek_gpu():
         return 'aman', "GPU aktif", "Tidak bisa membaca status"
 
 
-def tulis_health_state(disk, ram, gpu, layanan):
+def tulis_health_state(disk, ram, gpu, layanan, smart=None):
     """
     Tulis hasil semua cek ke JSON — dibaca oleh Sehat Check GUI.
     disk, ram, gpu  : tuple (status, value, detail)
     layanan         : tuple (status, list_failed)
+    smart           : tuple (status, value, detail) atau None
     """
-    # Map status string ke format GUI
     def map_status(s):
         return {"aman": "ok", "peringatan": "warning", "kritis": "error",
                 "bermasalah": "error", "error": "error"}.get(s, "ok")
 
-    disk_s, disk_v, disk_d   = disk
-    ram_s,  ram_v,  ram_d    = ram
-    gpu_s,  gpu_v,  gpu_d    = gpu
-    svc_s,  svc_failed       = layanan
+    disk_s, disk_v, disk_d = disk
+    ram_s,  ram_v,  ram_d  = ram
+    gpu_s,  gpu_v,  gpu_d  = gpu
+    svc_s,  svc_failed     = layanan
 
     state = {
         "storage": {
@@ -177,6 +191,15 @@ def tulis_health_state(disk, ram, gpu, layanan):
         "last_check": datetime.now().isoformat(),
     }
 
+    # Tambah S.M.A.R.T kalau tersedia
+    if smart:
+        smart_s, smart_v, smart_d = smart
+        state["disk_smart"] = {
+            "status": map_status(smart_s),
+            "value":  smart_v,
+            "detail": smart_d,
+        }
+
     try:
         HEALTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         HEALTH_STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
@@ -199,13 +222,38 @@ def laporan_sehat():
     gpu     = cek_gpu()
     layanan = cek_layanan()
 
+    # S.M.A.R.T — optional, graceful degradation kalau smartctl tidak ada
+    smart = None
+    if _SMART_AVAILABLE:
+        try:
+            hasil_smart = cek_smart()
+            smart = status_smart_overall(hasil_smart)
+            log.info(f"S.M.A.R.T: {smart[0]} — {smart[1]}")
+
+            # Kirim notifikasi kalau ada masalah S.M.A.R.T
+            if smart[0] in ('peringatan', 'kritis'):
+                try:
+                    from notification_dispatcher import notif_disk_smart_warning
+                    for h in hasil_smart:
+                        if h["status"] != 'aman':
+                            notif_disk_smart_warning(h["disk"], h["nilai"])
+                            break
+                except Exception:
+                    pass
+        except Exception as e:
+            log.error(f"S.M.A.R.T check error: {e}")
+
     # Tulis ke JSON biar GUI bisa baca
-    tulis_health_state(disk, ram, gpu, layanan)
+    tulis_health_state(disk, ram, gpu, layanan, smart)
 
     log.info("=" * 45)
     log.info("RINGKASAN:")
 
-    semua_aman = all(t[0] == 'aman' for t in [disk, ram, gpu]) and layanan[0] == 'aman'
+    semua_aman = (
+        all(t[0] == 'aman' for t in [disk, ram, gpu])
+        and layanan[0] == 'aman'
+        and (smart is None or smart[0] == 'aman')
+    )
 
     if semua_aman:
         log.info("Sistem kamu sehat — tidak ada masalah!")
@@ -214,6 +262,7 @@ def laporan_sehat():
         if ram[0]     != 'aman': log.warning(f"Memori: {ram[1]}")
         if gpu[0]     != 'aman': log.warning(f"GPU: {gpu[1]}")
         if layanan[0] != 'aman': log.warning(f"Layanan bermasalah: {layanan[1]}")
+        if smart and smart[0] != 'aman': log.warning(f"S.M.A.R.T: {smart[1]}")
 
     log.info("=" * 45)
     return semua_aman

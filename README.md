@@ -31,51 +31,65 @@ Distro Linux yang **proaktif** — bukan pasif. Sistem mendeteksi masalah, mempe
 ## Fitur Utama
 
 ### 🛡️ Zero-Panic Boot
-Boot gagal 2x berturut-turut? Sistem auto-rollback ke snapshot terakhir yang berjalan normal — tanpa user intervensi, tanpa CLI. User cukup nyalakan laptop.
+Boot gagal 2x berturut-turut? Sistem auto-rollback ke snapshot Btrfs terakhir yang berjalan normal. Event dicatat ke `/var/log/nusantara/recovery.log`. User cukup nyalakan laptop.
 
 ### 🔧 Hardware Watchdog & GPU Automation
-Setiap boot, sistem mendeteksi GPU dan memuat driver yang tepat. Kalau driver gagal, sistem otomatis fallback ke software rendering (llvmpipe) — desktop tetap muncul, tidak pernah black screen.
+Setiap boot, `nusantara-hw-detect.service` mendeteksi GPU dan memuat driver sebelum display manager jalan. Tulis `hw-state.json` ke `/var/lib/nusantara/`. Kalau GPU diganti antar-sesi, notifikasi wizard muncul otomatis. Kalau driver gagal → fallback ke llvmpipe, desktop tetap muncul.
 
 ### 🤖 System Guardian Daemon
-Daemon utama yang berjalan di background, mengkoordinasikan semua automation: boot recovery, hardware detection, health monitoring, dan notifikasi.
+Daemon utama yang jalan sebagai systemd service (`nusantara-guardian.service`). Kerjanya:
+- Boot sequence: cek counter → detect GPU → reset counter setelah sukses
+- Loop tiap 5 menit: cek disk, RAM, layanan sistem, S.M.A.R.T
+- Kirim notifikasi Bahasa Indonesia + action buttons
+- **Unix socket IPC** di `/run/nusantara/guardian.sock` — GUI bisa kirim event langsung
+
+### 🗺️ Konfigurasi Terpusat
+File `/etc/nusantara/guardian.conf` mengatur semua threshold (disk, RAM, interval, max boot gagal, dll). Perubahan aktif tanpa restart daemon via event `RELOAD_CONFIG`.
 
 ### 💚 Sehat Check
-Monitor kesehatan sistem dalam Bahasa Indonesia biasa — bukan error code. RAM, penyimpanan, GPU, layanan sistem — semuanya terpantau real-time dengan notifikasi yang bisa dimengerti siapa saja.
+Monitor kesehatan sistem realtime dalam Bahasa Indonesia — bukan error code. Disk, RAM, GPU, layanan sistem, **S.M.A.R.T disk health** — semua terpantau. Output ditulis ke `/var/lib/nusantara/health-state.json` dan dibaca GUI.
 
-### 🎮 Gaming Layer
-Stack gaming (Steam, Proton, Wine, MangoHud) di subvolume Btrfs terpisah. Update OS tidak bisa merusak kompatibilitas game.
-
-### 🗺️ Lokalisasi Indonesia Penuh
-- Default locale: `id_ID.UTF-8`
-- Timezone: WIB/WITA/WIT (pilihan saat install)
-- Semua notifikasi dalam Bahasa Indonesia
-- Font Noto (cover semua karakter Indonesia)
+### 🌏 Lokalisasi Indonesia Penuh
+Semua string UI dan notifikasi baca dari `localization/messages.json` via modul `i18n.py`. Ubah teks tanpa edit kode Python sama sekali.
 
 ---
 
-## Status Development
+## Status Development (Per 7 April 2026)
 
-### ✅ Selesai
+### ✅ Backend — Selesai
 | Komponen | File | Keterangan |
 |---|---|---|
-| Guardian Daemon | `guardian/main.py` | Loop utama + orchestration |
-| Boot Watcher | `guardian/boot_watcher.py` | Zero-Panic Boot logic |
-| Hardware Watcher | `guardian/hardware_watcher.py` | GPU & hardware detection |
-| Health Monitor | `guardian/health_monitor.py` | Cek disk, RAM, layanan — real data |
-| Notification Dispatcher | `guardian/notification_dispatcher.py` | Semua notif Bahasa Indonesia |
-| Sehat Check GUI | `guardian/sehat_check_ui.py` | PyQt6, brand Nusantara, auto-refresh 5 detik |
-| Driver Manager GUI | `guardian/driver_manager_ui.py` | One-click GPU driver fix |
-| System Tray Icon | `guardian/tray_icon.py` | Status color: hijau/kuning/merah |
-| GPU Detection Script | `gpu-automation/hw-detect.sh` | Auto-load driver sebelum display manager |
+| Guardian Daemon | `guardian/main.py` | Daemon utama + IPC socket server |
+| Config Terpusat | `guardian/config.py` | Singleton, baca `/etc/nusantara/guardian.conf` |
+| Boot Watcher | `guardian/boot_watcher.py` | Zero-Panic Boot, recovery.log, systemd-boot groundwork |
+| Hardware Watcher | `guardian/hardware_watcher.py` | GPU detection, `hw-state.json`, GPU change detection |
+| Health Monitor | `guardian/health_monitor.py` | Disk, RAM, GPU, layanan, S.M.A.R.T |
+| S.M.A.R.T Monitor | `guardian/smart_monitor.py` | Reallocated sectors, pending, NVMe errors |
+| Notification Dispatcher | `guardian/notification_dispatcher.py` | Notif Bahasa Indonesia + action buttons via gdbus |
+| i18n | `guardian/i18n.py` | `t("key", var=val)` baca dari messages.json |
+| IPC Socket | `guardian/main.py` | Unix socket server, handle event dari GUI |
+| GPU Detection Script | `gpu-automation/hw-detect.sh` | Jalan via systemd sebelum display manager |
 | Lokalisasi | `localization/messages.json` | Semua pesan Bahasa Indonesia |
-| Systemd Services | — | `nusantara-guardian` + `nusantara-hw-detect` aktif |
+
+### ✅ Systemd Services — Aktif
+| Service | Tipe | Keterangan |
+|---|---|---|
+| `nusantara-guardian.service` | simple | Guardian daemon, enabled, auto-restart |
+| `nusantara-hw-detect.service` | oneshot | GPU detect, Before=display-manager |
+
+### ✅ GUI — Selesai
+| Komponen | File | Keterangan |
+|---|---|---|
+| Sehat Check | `guardian/sehat_check_ui.py` | PyQt6, baca `health-state.json`, auto-refresh |
+| Driver Manager | `guardian/driver_manager_ui.py` | One-click GPU driver fix |
+| System Tray | `guardian/tray_icon.py` | Status color: hijau/kuning/merah |
+| Welcome Screen | `guardian/welcome_screen.py` | Onboarding user baru |
 
 ### ⏳ Belum
-- Welcome Screen GUI
 - Calamares installer config
-- Btrfs subvolume setup
-- Gaming layer
-- System tray icon integration ke main daemon
+- Btrfs subvolume setup + Gaming layer
+- System tray integration ke IPC daemon
+- Desktop Entry `.desktop` files
 
 ---
 
@@ -84,21 +98,30 @@ Stack gaming (Steam, Proton, Wine, MangoHud) di subvolume Btrfs terpisah. Update
 ```
 nusantara-os/
 ├── guardian/
-│   ├── main.py                     # Daemon utama
-│   ├── boot_watcher.py             # Zero-Panic Boot
-│   ├── hardware_watcher.py         # Hardware & GPU detection
-│   ├── health_monitor.py           # Health monitoring (real data)
-│   ├── notification_dispatcher.py  # Notifikasi Bahasa Indonesia
+│   ├── main.py                     # Daemon utama + IPC socket
+│   ├── config.py                   # Konfigurasi terpusat (singleton)
+│   ├── boot_watcher.py             # Zero-Panic Boot + recovery.log
+│   ├── hardware_watcher.py         # GPU detection + hw-state.json
+│   ├── health_monitor.py           # Health monitoring (disk/RAM/GPU/SMART)
+│   ├── smart_monitor.py            # S.M.A.R.T disk health via smartctl
+│   ├── notification_dispatcher.py  # Notifikasi Bahasa Indonesia + gdbus
+│   ├── i18n.py                     # Internationalization via messages.json
 │   ├── sehat_check_ui.py           # Sehat Check GUI (PyQt6)
 │   ├── driver_manager_ui.py        # Driver Manager GUI (PyQt6)
-│   └── tray_icon.py                # System tray icon
+│   ├── tray_icon.py                # System tray icon
+│   └── welcome_screen.py           # Welcome screen
 ├── gpu-automation/
-│   └── hw-detect.sh                # GPU detection & driver loading
+│   └── hw-detect.sh                # GPU detection & driver loading (systemd)
+├── systemd/
+│   ├── nusantara-guardian.service  # Guardian daemon service
+│   ├── nusantara-hw-detect.service # Hardware detection service
+│   └── install.sh                  # Install script (sudo bash install.sh)
 ├── localization/
-│   └── messages.json               # Bahasa Indonesia strings
-├── installer-config/
-│   └── calamares/                  # (coming soon)
-└── docs/
+│   └── messages.json               # Semua string Bahasa Indonesia
+├── etc/
+│   └── nusantara/
+│       └── guardian.conf           # Config template
+└── installer-config/               # (coming soon)
 ```
 
 ---
@@ -116,71 +139,66 @@ nusantara-os/
 | Filesystem | Btrfs |
 | GUI Framework | PyQt6 |
 | Automation | Python 3 (Guardian daemon) |
+| Notifikasi | gdbus (D-Bus) + notify-send fallback |
 | Apps | Flatpak + Flathub |
 | Installer | Calamares (coming soon) |
 
 ---
 
-## Cara Jalankan (Development)
-
-### Requirements
-```bash
-sudo pacman -S python-pyqt6
-```
-
-### Setup data directory
-```bash
-sudo mkdir -p /var/lib/nusantara
-sudo chown -R $USER:$USER /var/lib/nusantara
-```
-
-### Jalankan Guardian daemon
-```bash
-cd guardian
-sudo python main.py
-```
-
-### Jalankan Sehat Check GUI
-```bash
-python guardian/sehat_check_ui.py
-```
-
-### Jalankan Driver Manager GUI
-```bash
-python guardian/driver_manager_ui.py
-```
-
-### Jalankan System Tray
-```bash
-python guardian/tray_icon.py &
-```
-
-### Setup autostart tray (KDE)
-```bash
-mkdir -p ~/.config/autostart
-cat > ~/.config/autostart/nusantara-tray.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=NusantaraOS Guardian Tray
-Exec=python /home/$USER/nusantara-os/guardian/tray_icon.py
-Icon=computer
-Hidden=false
-X-GNOME-Autostart-enabled=true
-EOF
-```
-
----
-
-## Systemd Services
+## Cara Install Guardian Service
 
 ```bash
-# Install dan enable services
-sudo systemctl enable --now nusantara-guardian.service
-sudo systemctl enable --now nusantara-hw-detect.service
-
-# Cek status
-sudo systemctl status nusantara-guardian.service
+cd /path/to/nusantara-os
+sudo bash systemd/install.sh
 ```
+
+Script ini otomatis:
+- Copy semua file ke `/usr/lib/nusantara/`
+- Install + enable kedua systemd service
+- Set permissions direktori data
+
+## Cara Jalankan (Development — tanpa install)
+
+```bash
+# Requirements
+sudo pacman -S python-pyqt6 smartmontools
+
+# Guardian daemon
+cd /path/to/nusantara-os
+sudo python3 guardian/main.py
+
+# Test IPC socket (terminal lain)
+echo '{"type":"GUARDIAN_STATUS"}' | sudo socat - UNIX-CONNECT:/run/nusantara/guardian.sock
+echo '{"type":"HEALTH_CHECK_NOW"}' | sudo socat - UNIX-CONNECT:/run/nusantara/guardian.sock
+
+# Sehat Check GUI
+python3 guardian/sehat_check_ui.py
+
+# Driver Manager GUI
+python3 guardian/driver_manager_ui.py
+```
+
+## Systemd Commands
+
+```bash
+sudo systemctl start nusantara-guardian      # Jalankan sekarang
+sudo systemctl status nusantara-guardian     # Cek status
+sudo systemctl restart nusantara-guardian    # Restart
+sudo systemctl stop nusantara-guardian       # Stop
+journalctl -u nusantara-guardian -f          # Log live
+journalctl -u nusantara-hw-detect            # Log hardware detection
+```
+
+## Lokasi File Penting
+
+| File | Keterangan |
+|---|---|
+| `/etc/nusantara/guardian.conf` | Config utama (threshold, interval, dll) |
+| `/var/lib/nusantara/health-state.json` | Hasil health check terbaru (dibaca GUI) |
+| `/var/lib/nusantara/hw-state.json` | Status GPU terbaru |
+| `/var/log/nusantara/guardian.log` | Log daemon |
+| `/var/log/nusantara/recovery.log` | Log event pemulihan/rollback |
+| `/run/nusantara/guardian.sock` | Unix socket IPC |
 
 ---
 
@@ -188,7 +206,7 @@ sudo systemctl status nusantara-guardian.service
 
 | Versi | Codename | Status | Fokus |
 |---|---|---|---|
-| v0.1 Alpha | Halmahera | 🔄 In progress | LFS base, Guardian daemon, Sehat Check |
+| v0.1 Alpha | Halmahera | 🔄 In progress | Guardian daemon, backend PRD, systemd service |
 | v0.5 Beta | Lombok | ⏳ Planned | Calamares installer, Btrfs subvolumes |
 | v0.8 Beta | Bali | ⏳ Planned | Gaming layer, Steam, Proton-GE |
 | v1.0 Stable | Jawa | ⏳ Planned | Public release, ISO, dokumentasi |
@@ -206,19 +224,6 @@ sudo systemctl status nusantara-guardian.service
 
 ---
 
-## Kontribusi
-
-Project ini masih early stage dan di-develop secara solo. Kalau lo tertarik kontribusi:
-
-1. Fork repo ini
-2. Buat branch baru (`git checkout -b feat/nama-fitur`)
-3. Commit perubahan (`git commit -m "feat: deskripsi singkat"`)
-4. Push dan buat Pull Request
-
-Issues dan diskusi terbuka untuk semua.
-
----
-
 ## Dev Log
 
 | Tanggal | Milestone |
@@ -228,8 +233,11 @@ Issues dan diskusi terbuka untuk semua.
 | 06 Apr 2026 | GPU detection + systemd services aktif |
 | 07 Apr 2026 | Sehat Check PyQt6 GUI selesai |
 | 07 Apr 2026 | Driver Manager GUI + System Tray Icon selesai |
-| 07 Apr 2026 | Sehat Check reskin ke brand Nusantara OS |
-| 07 Apr 2026 | Health Monitor: real data + auto-refresh 5 detik |
+| 07 Apr 2026 | **Backend PRD v1.0 Sprint:** config.py, GPU change detection, IPC socket Unix, S.M.A.R.T monitor, boot_watcher + recovery.log |
+| 07 Apr 2026 | Notification action buttons via gdbus — semua notif punya tombol aksi |
+| 07 Apr 2026 | i18n.py — lokalisasi penuh via messages.json, tidak ada hardcoded string |
+| 07 Apr 2026 | systemd/install.sh — satu perintah install semua service |
+| 07 Apr 2026 | Guardian aktif sebagai service: 10MB RAM, <1% CPU idle |
 
 ---
 

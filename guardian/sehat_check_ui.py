@@ -278,10 +278,11 @@ class SehatCheckWindow(QMainWindow):
 
 
 def launch_sehat_check():
+    standalone = QApplication.instance() is None   # cek SEBELUM buat instance
     app = QApplication.instance() or QApplication(sys.argv)
     win = SehatCheckWindow()
     win.show()
-    if not QApplication.instance():
+    if standalone:
         sys.exit(app.exec())
     return win
 
