@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NusantaraOS Guardian Tray
+Exec=python3 /usr/lib/nusantara/guardian/tray_icon.py
+Icon=computer
+Hidden=false
+X-KDE-autostart-enabled=true
