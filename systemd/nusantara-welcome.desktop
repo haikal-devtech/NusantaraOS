@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NusantaraOS Welcome Screen
+Exec=python3 /usr/lib/nusantara/guardian/welcome_screen.py
+Icon=computer
+Hidden=false
+X-KDE-autostart-enabled=true
