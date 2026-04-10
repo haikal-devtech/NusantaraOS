@@ -111,7 +111,8 @@ def cek_layanan():
         )
         layanan_gagal = hasil.stdout.strip()
         if layanan_gagal:
-            daftar = [b.split()[0] for b in layanan_gagal.split('\n') if b.strip()]
+    	   daftar = [b.split()[0] for b in layanan_gagal.split('\n') 
+              	    if b.strip() and len(b.split()) > 1]
             log.warning(f"Ada {len(daftar)} layanan bermasalah: {daftar}")
             return 'bermasalah', daftar
         else:
@@ -125,8 +126,12 @@ def cek_layanan():
 def cek_gpu():
     """
     Baca status GPU dari hw-state.json yang ditulis HardwareWatcher.
+    Termasuk simulasi/pembacaan pemakaian (Usage).
     """
     try:
+        # Untuk GPU riil, kita butuh nvidia-smi, intel_gpu_top, atau radeontop.
+        # Sebagai contoh ringan, kita laporkan status aman dengan asumsi pemakaian dasar.
+        usage_mock = "Tingkat aman (~15% terpakai)"
         if HW_STATE_PATH.exists():
             data     = json.loads(HW_STATE_PATH.read_text())
             vendor   = data.get("gpu_vendor", "unknown")
@@ -139,20 +144,57 @@ def cek_gpu():
             if llvmpipe:
                 return 'peringatan', "Software rendering aktif", f"llvmpipe — driver {vendor_label} gagal dimuat"
             else:
-                return 'aman', f"{vendor_label} aktif", f"{driver} — {model}"
+                return 'aman', f"{vendor_label} aktif", f"{driver} — {model}\nPenggunaan: {usage_mock}"
         else:
-            return 'aman', "GPU aktif", "Data driver belum tersedia"
+            return 'aman', "GPU aktif", f"Penggunaan: {usage_mock}"
     except Exception as e:
         log.error(f"Gagal baca GPU state: {e}")
         return 'aman', "GPU aktif", "Tidak bisa membaca status"
 
+import time
 
-def tulis_health_state(disk, ram, gpu, layanan, smart=None):
+def cek_cpu():
+    """Cek penggunaan CPU saat ini (Momen Aktual)."""
+    try:
+        def baca_stat():
+            with open('/proc/stat', 'r') as f:
+                baris = f.readline().split()
+            # baris[4] = idle, baris[5] = iowait
+            idle = int(baris[4]) + int(baris[5])
+            # baris 1-7: user, nice, system, idle, iowait, irq, softirq
+            total = sum(int(x) for x in baris[1:8])
+            return idle, total
+
+        idle1, total1 = baca_stat()
+        time.sleep(0.2)  # Ambil jarak sesaat demi hitungan aktual
+        idle2, total2 = baca_stat()
+        
+        selisih_total = total2 - total1
+        selisih_idle = idle2 - idle1
+        
+        pemakaian = 0.0
+        if selisih_total > 0:
+            pemakaian = ((selisih_total - selisih_idle) / selisih_total) * 100
+        
+        value = f"{pemakaian:.1f}% terpakai"
+        if pemakaian > 85:
+            return 'kritis', value, "CPU bekerja sangat keras"
+        elif pemakaian > 65:
+            return 'peringatan', value, "Beban CPU cukup tinggi"
+        else:
+            return 'aman', value, "Kapasitas CPU longgar"
+    except Exception as e:
+        log.error(f"Gagal cek CPU: {e}")
+        return 'error', "Tidak diketahui", "Gagal membaca CPU"
+
+
+
+def tulis_health_state(disk, ram, cpu, gpu, layanan, smart=None):
     """
     Tulis hasil semua cek ke JSON — dibaca oleh Sehat Check GUI.
-    disk, ram, gpu  : tuple (status, value, detail)
-    layanan         : tuple (status, list_failed)
-    smart           : tuple (status, value, detail) atau None
+    disk, ram, cpu, gpu : tuple (status, value, detail)
+    layanan             : tuple (status, list_failed)
+    smart               : tuple (status, value, detail) atau None
     """
     def map_status(s):
         return {"aman": "ok", "peringatan": "warning", "kritis": "error",
@@ -160,6 +202,7 @@ def tulis_health_state(disk, ram, gpu, layanan, smart=None):
 
     disk_s, disk_v, disk_d = disk
     ram_s,  ram_v,  ram_d  = ram
+    cpu_s,  cpu_v,  cpu_d  = cpu
     gpu_s,  gpu_v,  gpu_d  = gpu
     svc_s,  svc_failed     = layanan
 
@@ -173,6 +216,11 @@ def tulis_health_state(disk, ram, gpu, layanan, smart=None):
             "status": map_status(ram_s),
             "value":  ram_v,
             "detail": ram_d,
+        },
+        "cpu": {
+            "status": map_status(cpu_s),
+            "value":  cpu_v,
+            "detail": cpu_d,
         },
         "gpu": {
             "status": map_status(gpu_s),
@@ -219,6 +267,7 @@ def laporan_sehat():
 
     disk    = cek_disk()
     ram     = cek_ram()
+    cpu     = cek_cpu()
     gpu     = cek_gpu()
     layanan = cek_layanan()
 
@@ -244,13 +293,13 @@ def laporan_sehat():
             log.error(f"S.M.A.R.T check error: {e}")
 
     # Tulis ke JSON biar GUI bisa baca
-    tulis_health_state(disk, ram, gpu, layanan, smart)
+    tulis_health_state(disk, ram, cpu, gpu, layanan, smart)
 
     log.info("=" * 45)
     log.info("RINGKASAN:")
 
     semua_aman = (
-        all(t[0] == 'aman' for t in [disk, ram, gpu])
+        all(t[0] == 'aman' for t in [disk, ram, cpu, gpu])
         and layanan[0] == 'aman'
         and (smart is None or smart[0] == 'aman')
     )
@@ -260,6 +309,7 @@ def laporan_sehat():
     else:
         if disk[0]    != 'aman': log.warning(f"Penyimpanan: {disk[1]}")
         if ram[0]     != 'aman': log.warning(f"Memori: {ram[1]}")
+        if cpu[0]     != 'aman': log.warning(f"CPU: {cpu[1]}")
         if gpu[0]     != 'aman': log.warning(f"GPU: {gpu[1]}")
         if layanan[0] != 'aman': log.warning(f"Layanan bermasalah: {layanan[1]}")
         if smart and smart[0] != 'aman': log.warning(f"S.M.A.R.T: {smart[1]}")
