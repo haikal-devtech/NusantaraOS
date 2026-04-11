@@ -16,6 +16,7 @@ Recovery events dicatat ke /var/log/nusantara/recovery.log
 import logging
 import os
 import subprocess
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +35,11 @@ except ImportError:
     MAX_GAGAL         = 2
     USE_SYSTEMD_BOOT  = True
     RECOVERY_LOG      = Path("/var/log/nusantara/recovery.log")
+
+# Path Btrfs
+BTRFS_ROOT_LABEL = "NusantaraOS"   # label partisi root (sesuai install script)
+BTRFS_MNT_TMP   = Path("/tmp/nusantara-btrfs-root")
+SNAPSHOT_DIR     = Path("/.snapshots")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -56,7 +62,6 @@ def _tulis_recovery_log(pesan: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _bootctl_tersedia() -> bool:
-    """Cek apakah bootctl (systemd-boot) tersedia di sistem ini."""
     try:
         result = subprocess.run(
             ['bootctl', 'is-installed'],
@@ -68,18 +73,11 @@ def _bootctl_tersedia() -> bool:
 
 
 def _baca_counter_bootctl() -> int:
-    """
-    Baca boot counter dari systemd-boot via bootctl.
-    systemd-boot punya built-in boot counter di entry .conf
-    Format: <name>+<tries-left>-<tries-done>.conf
-    Kita parse dari bootctl status.
-    """
     try:
         result = subprocess.run(
             ['bootctl', 'status', '--no-pager'],
             capture_output=True, text=True, timeout=10
         )
-        # Cari baris "Boot Loader Spec" atau "Bad EFI" / tries done
         for line in result.stdout.split('\n'):
             if 'tries done' in line.lower() or 'tries-done' in line.lower():
                 parts = line.split(':')
@@ -94,27 +92,11 @@ def _baca_counter_bootctl() -> int:
         return 0
 
 
-def _set_boot_tries(jumlah: int):
-    """Set boot tries counter via bootctl (systemd-boot)."""
-    try:
-        # bootctl set-boot-loader-flag tidak ada di semua versi
-        # Cara terbaik: via kernel parameter atau entry renaming
-        # Untuk sekarang: pakai file counter sebagai primary, bootctl sebagai info
-        log.debug(f"bootctl boot tries akan diset ke {jumlah} (future feature)")
-    except Exception as e:
-        log.debug(f"bootctl set tries: {e}")
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-# FILE COUNTER (fallback + primary saat ini)
+# FILE COUNTER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def baca_counter() -> int:
-    """
-    Baca berapa kali sistem sudah gagal boot.
-    Coba systemd-boot dulu, fallback ke file counter.
-    """
-    # Coba baca dari file counter (reliable di semua setup)
     try:
         BOOT_COUNTER_FILE.parent.mkdir(parents=True, exist_ok=True)
         if BOOT_COUNTER_FILE.exists():
@@ -130,7 +112,6 @@ def baca_counter() -> int:
 
 
 def tulis_counter(angka: int):
-    """Simpan angka counter boot gagal ke file."""
     try:
         BOOT_COUNTER_FILE.parent.mkdir(parents=True, exist_ok=True)
         BOOT_COUNTER_FILE.write_text(str(angka))
@@ -140,10 +121,6 @@ def tulis_counter(angka: int):
 
 
 def reset_counter():
-    """
-    Reset counter ke 0 setelah boot berhasil normal.
-    Dipanggil dari main.py setelah Guardian aktif.
-    """
     try:
         if BOOT_COUNTER_FILE.exists():
             BOOT_COUNTER_FILE.unlink()
@@ -154,14 +131,128 @@ def reset_counter():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROLLBACK
+# HELPER: BTRFS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _cari_device_btrfs() -> str | None:
+    """Cari block device dari partisi Btrfs root NusantaraOS."""
+    try:
+        # Cari via label dulu
+        result = subprocess.run(
+            ['blkid', '-L', BTRFS_ROOT_LABEL],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+
+        # Fallback: cari dari mount info
+        result = subprocess.run(
+            ['findmnt', '-n', '-o', 'SOURCE', '/'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as e:
+        log.error(f"Gagal cari device Btrfs: {e}")
+    return None
+
+
+def _mount_btrfs_root(device: str) -> bool:
+    """Mount raw Btrfs partition (tanpa subvolume) ke tmp dir."""
+    try:
+        BTRFS_MNT_TMP.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ['mount', '-o', 'noatime', device, str(BTRFS_MNT_TMP)],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            log.info(f"Btrfs root ter-mount di {BTRFS_MNT_TMP}")
+            return True
+        else:
+            log.error(f"Gagal mount Btrfs: {result.stderr}")
+            return False
+    except Exception as e:
+        log.error(f"Error mount Btrfs: {e}")
+        return False
+
+
+def _umount_btrfs_root():
+    """Unmount tmp Btrfs mount."""
+    try:
+        subprocess.run(['umount', str(BTRFS_MNT_TMP)],
+                      capture_output=True, text=True)
+        BTRFS_MNT_TMP.rmdir()
+    except Exception:
+        pass
+
+
+def _cari_snapshot_terbaru() -> Path | None:
+    """
+    Cari snapshot terbaru di /.snapshots.
+    Snapper simpan snapshot di /.snapshots/<id>/snapshot/
+    """
+    if not SNAPSHOT_DIR.exists():
+        log.warning("/.snapshots tidak ditemukan")
+        return None
+
+    kandidat = []
+    for entry in SNAPSHOT_DIR.iterdir():
+        # Format Snapper: /.snapshots/<id>/snapshot
+        snap_path = entry / "snapshot"
+        if snap_path.exists() and snap_path.is_dir():
+            kandidat.append((entry.stat().st_mtime, snap_path))
+
+    if not kandidat:
+        log.warning("Tidak ada snapshot Snapper di /.snapshots")
+        return None
+
+    # Ambil yang paling baru
+    kandidat.sort(reverse=True)
+    latest = kandidat[0][1]
+    log.info(f"Snapshot terbaru: {latest}")
+    return latest
+
+
+def _cari_snapshot_terbaru_dari_mount() -> Path | None:
+    """
+    Cari snapshot dari Btrfs yang sudah di-mount ke BTRFS_MNT_TMP.
+    Untuk kasus di mana /.snapshots belum ter-mount.
+    """
+    snap_dir = BTRFS_MNT_TMP / "@snapshots"
+    if not snap_dir.exists():
+        snap_dir = BTRFS_MNT_TMP / ".snapshots"
+    if not snap_dir.exists():
+        return None
+
+    kandidat = []
+    for entry in snap_dir.iterdir():
+        snap_path = entry / "snapshot"
+        if snap_path.exists():
+            kandidat.append((entry.stat().st_mtime, snap_path))
+
+    if not kandidat:
+        return None
+
+    kandidat.sort(reverse=True)
+    return kandidat[0][1]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROLLBACK AKTUAL
 # ══════════════════════════════════════════════════════════════════════════════
 
 def mulai_rollback():
     """
     Prosedur rollback ke Btrfs snapshot terakhir yang bagus.
-    PRD 5.1: home directory TIDAK dirollback.
-    Semua event dicatat ke recovery.log.
+    PRD 5.1: home directory TIDAK dirollback — hanya @ (root).
+
+    Alur:
+    1. Cari device Btrfs root
+    2. Mount raw Btrfs (tanpa subvolume)
+    3. Rename @ → @_broken_<timestamp>
+    4. Buat snapshot baru @ dari snapshot terbaru
+    5. Unmount
+    6. Reboot
     """
     log.warning("=" * 55)
     log.warning("NUSANTARA OS — PEMULIHAN OTOMATIS")
@@ -171,7 +262,7 @@ def mulai_rollback():
 
     _tulis_recovery_log("ROLLBACK DIPICU — sistem gagal boot berulang")
 
-    # ── Cek apakah Btrfs tersedia ──────────────────────────────────────────
+    # ── 1. Cek filesystem Btrfs ────────────────────────────────────────────
     try:
         result = subprocess.run(
             ['findmnt', '-n', '-o', 'FSTYPE', '/'],
@@ -179,51 +270,100 @@ def mulai_rollback():
         )
         fs_type = result.stdout.strip()
         if fs_type != 'btrfs':
-            log.warning(f"Root filesystem adalah '{fs_type}', bukan Btrfs")
-            log.warning("Zero-Panic Boot membutuhkan Btrfs — rollback dilewati")
+            log.warning(f"Root filesystem '{fs_type}' bukan Btrfs — rollback dilewati")
             _tulis_recovery_log(f"ROLLBACK DILEWATI — filesystem {fs_type} bukan Btrfs")
             reset_counter()
             return
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"Gagal cek filesystem: {e}")
 
-    # ── Cari snapshot yang tersedia ────────────────────────────────────────
-    snapshot_dir = Path("/.snapshots")
-    if not snapshot_dir.exists():
-        log.warning("Direktori /.snapshots tidak ditemukan")
-        log.warning("Pastikan Btrfs subvolume @snapshots sudah di-setup")
-        _tulis_recovery_log("ROLLBACK GAGAL — /.snapshots tidak ditemukan")
+    # ── 2. Cari device Btrfs ───────────────────────────────────────────────
+    device = _cari_device_btrfs()
+    if not device:
+        log.error("Gagal cari block device Btrfs root")
+        _tulis_recovery_log("ROLLBACK GAGAL — tidak bisa cari block device")
+        reset_counter()
+        return
+
+    log.info(f"Device Btrfs: {device}")
+    _tulis_recovery_log(f"Device Btrfs: {device}")
+
+    # ── 3. Mount raw Btrfs ─────────────────────────────────────────────────
+    if not _mount_btrfs_root(device):
+        log.error("Gagal mount Btrfs root partition")
+        _tulis_recovery_log("ROLLBACK GAGAL — gagal mount Btrfs")
         reset_counter()
         return
 
     try:
-        # Cari snapshot terbaru (kecuali yang baru dibuat saat ini)
-        snapshots = sorted(snapshot_dir.iterdir(), key=os.path.getmtime, reverse=True)
-        if not snapshots:
-            log.warning("Tidak ada snapshot tersedia untuk rollback")
-            _tulis_recovery_log("ROLLBACK GAGAL — tidak ada snapshot")
+        # ── 4. Cari snapshot terbaru ───────────────────────────────────────
+        snapshot = _cari_snapshot_terbaru_dari_mount()
+        if not snapshot:
+            # Coba dari /.snapshots yang sudah ter-mount
+            snapshot = _cari_snapshot_terbaru()
+
+        if not snapshot:
+            log.error("Tidak ada snapshot tersedia untuk rollback")
+            _tulis_recovery_log("ROLLBACK GAGAL — tidak ada snapshot tersedia")
+            _umount_btrfs_root()
             reset_counter()
             return
 
-        snapshot_terbaru = snapshots[0]
-        log.info(f"Snapshot ditemukan: {snapshot_terbaru}")
-        _tulis_recovery_log(f"Snapshot target: {snapshot_terbaru}")
+        log.info(f"Snapshot untuk rollback: {snapshot}")
+        _tulis_recovery_log(f"Snapshot target: {snapshot}")
 
-        # TODO (Phase 5): implementasi swap root ke snapshot
-        # Steps yang akan dilakukan:
-        # 1. btrfs subvolume set-default <snapshot_id>
-        # 2. grub/systemd-boot update
-        # 3. Reboot ke snapshot
-        # 4. Setelah boot dari snapshot: kirim notif_pemulihan_berhasil()
+        # ── 5. Rename @ yang rusak ─────────────────────────────────────────
+        subvol_root = BTRFS_MNT_TMP / "@"
+        timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        subvol_lama = BTRFS_MNT_TMP / f"@_broken_{timestamp}"
 
-        log.info("(Implementasi Btrfs swap-root menyusul di Phase 5 — v0.9 RC)")
-        _tulis_recovery_log("SIMULASI ROLLBACK — implementasi Btrfs menyusul di Phase 5")
+        log.info(f"Rename @ → @_broken_{timestamp}")
+        result = subprocess.run(
+            ['btrfs', 'subvolume', 'snapshot',
+             str(subvol_root), str(subvol_lama)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            # Coba rename biasa
+            subvol_root.rename(subvol_lama)
+
+        _tulis_recovery_log(f"@ lama di-backup ke @_broken_{timestamp}")
+
+        # ── 6. Buat @ baru dari snapshot ──────────────────────────────────
+        log.info(f"Buat @ baru dari snapshot: {snapshot}")
+        result = subprocess.run(
+            ['btrfs', 'subvolume', 'snapshot',
+             str(snapshot), str(BTRFS_MNT_TMP / "@")],
+            capture_output=True, text=True
+        )
+
+        if result.returncode != 0:
+            log.error(f"Gagal buat snapshot @: {result.stderr}")
+            _tulis_recovery_log(f"ROLLBACK GAGAL — btrfs snapshot error: {result.stderr}")
+            # Restore @ lama kalau gagal
+            if subvol_lama.exists():
+                subvol_lama.rename(BTRFS_MNT_TMP / "@")
+            _umount_btrfs_root()
+            reset_counter()
+            return
+
+        _tulis_recovery_log("@ baru berhasil dibuat dari snapshot ✅")
+        log.info("Rollback Btrfs berhasil! Reboot dalam 5 detik...")
 
     except Exception as e:
         log.error(f"Error saat rollback: {e}")
         _tulis_recovery_log(f"ROLLBACK ERROR: {e}")
+    finally:
+        _umount_btrfs_root()
 
+    # ── 7. Reset counter + reboot ──────────────────────────────────────────
     reset_counter()
+    _tulis_recovery_log("Sistem akan reboot ke snapshot yang dipulihkan")
+
+    log.info("Reboot dalam 5 detik...")
+    import time
+    time.sleep(5)
+    subprocess.run(['systemctl', 'reboot'])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -256,7 +396,6 @@ def cek_boot():
         counter_baru = counter + 1
         tulis_counter(counter_baru)
         log.info(f"Boot attempt ke-{counter_baru} — sistem loading...")
-        log.info(f"Kalau boot sukses, counter akan direset otomatis")
         if counter_baru > 0:
             _tulis_recovery_log(f"Boot attempt ke-{counter_baru} — belum trigger rollback")
 
@@ -273,15 +412,9 @@ if __name__ == "__main__":
     log.info("\nSimulasi boot pertama:")
     cek_boot()
 
-    log.info("\nSimulasi boot gagal kedua:")
-    cek_boot()
-
-    log.info("\nSimulasi boot gagal ketiga (trigger rollback):")
-    cek_boot()
-
     log.info("\nSimulasi boot sukses (reset counter):")
     reset_counter()
 
-    log.info(f"\nRecovery log: {RECOVERY_LOG}")
     if Path(RECOVERY_LOG).exists():
+        print("\nRecovery log:")
         print(Path(RECOVERY_LOG).read_text())
