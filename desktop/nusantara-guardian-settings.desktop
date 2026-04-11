@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Pengaturan Guardian
+Name[id]=Pengaturan Guardian
+GenericName=Guardian Settings
+GenericName[id]=Pengaturan Guardian Daemon
+Comment=Konfigurasi Guardian daemon NusantaraOS
+Comment[id]=Konfigurasi Guardian daemon NusantaraOS
+Exec=pkexec nano /etc/nusantara/guardian.conf
+Icon=preferences-system
+Terminal=false
+Categories=System;Settings;
+Keywords=guardian;pengaturan;konfigurasi;daemon;
+StartupNotify=true

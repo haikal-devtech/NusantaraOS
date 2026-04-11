@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Log Guardian
+Name[id]=Log Guardian
+GenericName=Guardian Log Viewer
+GenericName[id]=Lihat Log Guardian
+Comment=Lihat log aktivitas Guardian daemon
+Comment[id]=Lihat log aktivitas Guardian daemon
+Exec=konsole -e journalctl -u nusantara-guardian -f
+Icon=utilities-log-viewer
+Terminal=false
+Categories=System;
+Keywords=log;guardian;jurnal;aktivitas;
+StartupNotify=true

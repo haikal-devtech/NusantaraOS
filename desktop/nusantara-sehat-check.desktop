@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Sehat Check
+Name[id]=Sehat Check
+GenericName=System Health Monitor
+GenericName[id]=Monitor Kesehatan Sistem
+Comment=Pantau kesehatan sistem dalam Bahasa Indonesia
+Comment[id]=Pantau kesehatan sistem dalam Bahasa Indonesia
+Exec=python3 /usr/lib/nusantara/guardian/sehat_check_ui.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=kesehatan;sistem;monitor;disk;ram;gpu;
+StartupNotify=true
+StartupWMClass=sehat_check_ui

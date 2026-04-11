@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Manajer Driver
+Name[id]=Manajer Driver
+GenericName=Driver Manager
+GenericName[id]=Manajer Driver GPU
+Comment=Kelola dan perbaiki driver GPU dengan satu klik
+Comment[id]=Kelola dan perbaiki driver GPU dengan satu klik
+Exec=python3 /usr/lib/nusantara/guardian/driver_manager_ui.py
+Icon=preferences-desktop-display
+Terminal=false
+Categories=System;HardwareSettings;
+Keywords=driver;gpu;nvidia;amd;intel;grafis;
+StartupNotify=true
+StartupWMClass=driver_manager_ui

@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Selamat Datang
+Name[id]=Selamat Datang
+GenericName=Welcome Screen
+GenericName[id]=Layar Sambutan
+Comment=Selamat datang di NusantaraOS
+Comment[id]=Selamat datang di NusantaraOS
+Exec=python3 /usr/lib/nusantara/guardian/welcome_screen.py --force
+Icon=start-here
+Terminal=false
+Categories=System;
+Keywords=welcome;sambutan;mulai;nusantara;
+StartupNotify=true
+StartupWMClass=welcome_screen
