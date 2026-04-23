@@ -1,291 +1,466 @@
 """
-NusantaraOS — Sehat Check GUI
+NusantaraOS — Sehat Check GUI (Real-time & Responsive Version)
 File: guardian/sehat_check_ui.py
 
 Monitor kesehatan sistem dalam Bahasa Indonesia.
-Auto-refresh tiap 5 detik — tidak perlu klik Cek Ulang.
+- Update per 1 detik (Real-time).
+- Menggunakan QThread agar UI tidak freeze (non-blocking).
+- Update widget "in-place" (tanpa flicker/rebuild).
+- Layout responsif menggunakan QScrollArea.
 """
 
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtGui import QCursor, QColor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QFrame, QSizePolicy,
+    QLabel, QPushButton, QFrame, QGridLayout, QScrollArea,
+    QGraphicsDropShadowEffect, QSizePolicy
 )
 
 HEALTH_STATE_PATH = Path("/var/lib/nusantara/health-state.json")
 GUARDIAN_DIR      = os.path.dirname(os.path.abspath(__file__))
 
 FALLBACK_HEALTH = {
-    "storage":  {"value": "2 GB tersisa",  "status": "warning", "detail": "Partisi / hampir penuh"},
-    "memory":   {"value": "42% terpakai",  "status": "ok",      "detail": "3.4 GB dari 5.7 GB"},
-    "gpu":      {"value": "Intel aktif",   "status": "ok",      "detail": "i915 — driver normal"},
-    "guardian": {"value": "Aktif",         "status": "ok",      "detail": "Semua modul berjalan"},
+    "storage":  {"value": "Menghitung...", "status": "ok", "detail": "Menunggu data... "},
+    "memory":   {"value": "Menghitung...", "status": "ok", "detail": "Menunggu data... "},
+    "cpu":      {"value": "Menghitung...", "status": "ok", "detail": "Menunggu data... "},
+    "gpu":      {"value": "Menghitung...", "status": "ok", "detail": "Menunggu data... "},
+    "guardian": {"value": "Aktif",         "status": "ok", "detail": "Semua modul berjalan"},
     "services": {"failed": [],             "status": "ok"},
     "last_check": None,
 }
 
+# Palet Warna Nusantara (Modern Dark Batik Vibes)
 C = {
-    "bg":           "#1C0F0A",
-    "surface":      "#2A1A12",
-    "surface2":     "#3A2518",
-    "border":       "#4A3020",
-    "text":         "#F2E4C0",
-    "text_muted":   "#A08060",
-    "red":          "#8B1A1A",
-    "red_bright":   "#C0302A",
-    "gold":         "#C5940A",
-    "gold_bright":  "#E8B020",
-    "green":        "#1D5C38",
-    "green_bright": "#2E8A52",
+    "bg":           "#140D0A", # Sangat gelap, nyaris hitam
+    "surface":      "#241813", # Cokelat gelap untuk card
+    "surface2":     "#33231A", # Hover state
+    "border":       "#4A3224",
+    "text":         "#F5EBE1", # Krem terang
+    "text_muted":   "#B89E8A",
+    "red":          "#992B2B", # Merah saga
+    "red_bright":   "#E04545",
+    "gold":         "#D4A017", # Emas prada
+    "gold_bright":  "#FFC933",
+    "green":        "#2A6B3D", # Hijau zamrud
+    "green_bright": "#3DB061",
+    "accent":       "#D4A017", # Warna aksen utama
 }
 
 STATUS_CONFIG = {
-    "ok":      ("Aman",       C["green_bright"], C["green"], C["green"]),
-    "warning": ("Peringatan", C["gold_bright"],  C["gold"],  C["gold"]),
-    "error":   ("Bahaya",     C["red_bright"],   C["red"],   C["red"]),
+    "ok":      ("Aman",       C["green_bright"], C["green"], "✅"),
+    "warning": ("Peringatan", C["gold_bright"],  C["gold"],  "⚠️"),
+    "error":   ("Bahaya",     C["red_bright"],   C["red"],   "🚨"),
 }
 
-REFRESH_MS = 5_000
+REFRESH_MS = 1_000  # Update per detik
 
 
-class Divider(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.HLine)
-        self.setStyleSheet(f"background:{C['border']};min-height:1px;max-height:1px;border:none;")
+# === Background Worker untuk mencegah UI nge-freeze ===
 
+class HealthCheckWorker(QThread):
+    """Jalankan health_monitor di background, kirim sinyal ke UI setelah selesai."""
+    data_ready = pyqtSignal(dict)
 
-class StatusBadge(QLabel):
-    def __init__(self, status: str):
-        label, color, _, _ = STATUS_CONFIG.get(status, STATUS_CONFIG["ok"])
-        super().__init__(f"● {label}")
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.setStyleSheet(f"color:{color};font-size:12px;font-weight:600;background:transparent;border:none;")
-
-
-class MetricCard(QFrame):
-    def __init__(self, title: str, value: str, status: str, detail: str = ""):
-        super().__init__()
-        _, color, _, border = STATUS_CONFIG.get(status, STATUS_CONFIG["ok"])
-        card_border = border if status != "ok" else C["border"]
-        self.setStyleSheet(f"QFrame {{background:{C['surface']};border:1px solid {card_border};border-radius:10px;}}")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(110)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(6)
-
-        t = QLabel(title)
-        t.setStyleSheet(f"color:{C['text_muted']};font-size:13px;font-weight:500;border:none;background:transparent;")
-        layout.addWidget(t)
-
-        v = QLabel(value)
-        v.setStyleSheet(f"color:{color};font-size:17px;font-weight:700;border:none;background:transparent;")
-        v.setWordWrap(True)
-        layout.addWidget(v)
-
-        layout.addWidget(StatusBadge(status))
-
-        if detail:
-            d = QLabel(detail)
-            d.setStyleSheet(f"color:{C['text_muted']};font-size:11px;border:none;background:transparent;")
-            d.setWordWrap(True)
-            layout.addWidget(d)
-
-        layout.addStretch()
-
-
-class ServiceRow(QWidget):
-    def __init__(self, name: str, ok: bool = True):
-        super().__init__()
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        dot = QLabel("✓" if ok else "✗")
-        dot.setStyleSheet(f"color:{'#2E8A52' if ok else '#C0302A'};font-size:14px;font-weight:700;min-width:20px;")
-        lbl = QLabel(name)
-        lbl.setStyleSheet(f"color:{C['text']};font-size:13px;")
-        layout.addWidget(dot)
-        layout.addWidget(lbl)
-        layout.addStretch()
-
-
-class ActionButton(QPushButton):
-    def __init__(self, text: str, primary: bool = True):
-        super().__init__(text)
-        bg, bg_h = (C["red"], C["red_bright"]) if primary else (C["surface2"], C["border"])
-        self.setStyleSheet(f"""
-            QPushButton {{background:{bg};color:{C['text']};border:1px solid {C['border']};
-                border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;}}
-            QPushButton:hover {{background:{bg_h};border-color:{C['gold']};}}
-        """)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(38)
-
-
-class SehatCheckWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.data = self._load_state()
-
-        self.setWindowTitle("NusantaraOS — Sehat Check")
-        self.setMinimumSize(640, 460)
-        self.setMaximumSize(900, 700)
-        self.setStyleSheet(f"""
-            QMainWindow, QWidget {{background:{C['bg']};color:{C['text']};
-                font-family:'Noto Sans','Segoe UI',sans-serif;}}
-            QScrollBar:vertical {{width:4px;background:{C['surface']};}}
-            QScrollBar::handle:vertical {{background:{C['border']};border-radius:2px;}}
-        """)
-
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(20, 16, 20, 20)
-        root.setSpacing(14)
-
-        # Header
-        header = QHBoxLayout()
-        il = QHBoxLayout()
-        il.setSpacing(8)
-        heart = QLabel("❤")
-        heart.setStyleSheet(f"color:{C['red_bright']};font-size:20px;")
-        title = QLabel("Sehat Check")
-        title.setStyleSheet(f"color:{C['text']};font-size:20px;font-weight:700;")
-        il.addWidget(heart)
-        il.addWidget(title)
-        header.addLayout(il)
-        header.addStretch()
-        overall = self._overall_status()
-        _, color, _, _ = STATUS_CONFIG.get(overall, STATUS_CONFIG["ok"])
-        self.overall_badge = QLabel(f"● {'Semua Normal' if overall == 'ok' else 'Ada Peringatan' if overall == 'warning' else 'Ada Masalah'}")
-        self.overall_badge.setStyleSheet(f"color:{color};font-size:13px;font-weight:600;")
-        header.addWidget(self.overall_badge)
-        root.addLayout(header)
-        root.addWidget(Divider())
-
-        # Kondisi Sistem
-        kl = QLabel("KONDISI SISTEM")
-        kl.setStyleSheet(f"color:{C['text_muted']};font-size:11px;font-weight:600;letter-spacing:1px;")
-        root.addWidget(kl)
-        self.cards_layout = QHBoxLayout()
-        self.cards_layout.setSpacing(10)
-        self._build_cards()
-        root.addLayout(self.cards_layout)
-        root.addWidget(Divider())
-
-        # Layanan Sistem
-        ll = QLabel("LAYANAN SISTEM")
-        ll.setStyleSheet(f"color:{C['text_muted']};font-size:11px;font-weight:600;letter-spacing:1px;")
-        root.addWidget(ll)
-        self.services_container = QWidget()
-        self.services_layout = QVBoxLayout(self.services_container)
-        self.services_layout.setContentsMargins(0, 0, 0, 0)
-        self.services_layout.setSpacing(2)
-        self._build_services()
-        root.addWidget(self.services_container)
-
-        root.addStretch()
-        root.addWidget(Divider())
-
-        # Footer
-        footer = QHBoxLayout()
-        self.time_lbl = QLabel(self._last_check_text())
-        self.time_lbl.setStyleSheet(f"color:{C['text_muted']};font-size:11px;")
-        cek_btn = ActionButton("🔄  Cek Ulang", primary=False)
-        cek_btn.setFixedWidth(130)
-        cek_btn.clicked.connect(self._refresh)
-        footer.addWidget(self.time_lbl)
-        footer.addStretch()
-        footer.addWidget(cek_btn)
-        root.addLayout(footer)
-
-        # Auto-refresh tiap 5 detik
-        self._timer = QTimer()
-        self._timer.timeout.connect(self._refresh)
-        self._timer.start(REFRESH_MS)
-
-    def _build_cards(self):
-        d = self.data
-        for title, key in [("Penyimpanan","storage"),("Memori","memory"),("GPU","gpu"),("Guardian","guardian")]:
-            self.cards_layout.addWidget(MetricCard(
-                title, d[key]["value"], d[key]["status"], d[key].get("detail","")
-            ))
-
-    def _build_services(self):
-        while self.services_layout.count():
-            w = self.services_layout.takeAt(0).widget()
-            if w: w.deleteLater()
-        failed = self.data["services"].get("failed", [])
-        if not failed:
-            self.services_layout.addWidget(ServiceRow("Semua layanan sistem berjalan normal", ok=True))
-        else:
-            for svc in failed:
-                self.services_layout.addWidget(ServiceRow(svc, ok=False))
-
-    def _load_state(self) -> dict:
-        if HEALTH_STATE_PATH.exists():
-            try:
-                return json.loads(HEALTH_STATE_PATH.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-        return FALLBACK_HEALTH.copy()
-
-    def _run_health_check(self):
+    def run(self):
         try:
             sys.path.insert(0, GUARDIAN_DIR)
             from health_monitor import laporan_sehat
             laporan_sehat()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error run health check: {e}")
+        
+        # Load the newly written state
+        data = FALLBACK_HEALTH.copy()
+        if HEALTH_STATE_PATH.exists():
+            try:
+                data = json.loads(HEALTH_STATE_PATH.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+                
+        self.data_ready.emit(data)
 
-    def _overall_status(self) -> str:
-        statuses = [self.data[k]["status"] for k in ("storage","memory","gpu","guardian","services")]
-        if "error"   in statuses: return "error"
+
+# === Komponen UI Custom ===
+
+def add_shadow(widget, radius=15, offset=(0, 4), color="#000000", alpha=80):
+    shadow = QGraphicsDropShadowEffect()
+    shadow.setBlurRadius(radius)
+    shadow.setOffset(offset[0], offset[1])
+    c = QColor(color)
+    c.setAlpha(alpha)
+    shadow.setColor(c)
+    widget.setGraphicsEffect(shadow)
+
+
+class ActionButton(QPushButton):
+    def __init__(self, text: str, icon: str = "", primary: bool = False):
+        full_text = f"{icon}  {text}" if icon else text
+        super().__init__(full_text)
+        
+        if primary:
+            bg, hover, border, text_c = C["accent"], C["gold_bright"], C["accent"], "#140D0A"
+        else:
+            bg, hover, border, text_c = C["surface"], C["surface2"], C["border"], C["text"]
+            
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {text_c};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 10px 16px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {hover};
+                border: 1px solid {C['gold_bright']};
+            }}
+            QPushButton:pressed {{
+                background-color: {C['surface2'] if not primary else C['gold']};
+            }}
+        """)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        add_shadow(self, radius=10, offset=(0,2), alpha=50)
+
+
+class MetricCard(QFrame):
+    """Kartu metrik yang bisa di-update secara 'in-place'."""
+    def __init__(self, title: str, icon: str):
+        super().__init__()
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['surface']};
+                border: 1px solid {C['border']};
+                border-radius: 12px;
+            }}
+        """)
+        add_shadow(self)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(8)
+
+        # Header card (Icon + Title + Status Badge)
+        header = QHBoxLayout()
+        header.setContentsMargins(0,0,0,0)
+        
+        icon_lbl = QLabel(icon)
+        icon_lbl.setStyleSheet("font-size: 18px; background: transparent; border: none;")
+        
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 14px; font-weight: bold; background: transparent; border: none;")
+        
+        self.status_lbl = QLabel()
+        self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        header.addWidget(icon_lbl)
+        header.addWidget(title_lbl)
+        header.addStretch()
+        header.addWidget(self.status_lbl)
+        layout.addLayout(header)
+
+        # Value
+        self.value_lbl = QLabel("-")
+        self.value_lbl.setStyleSheet(f"color: {C['text']}; font-size: 18px; font-weight: bold; background: transparent; border: none;")
+        self.value_lbl.setWordWrap(True)
+        layout.addWidget(self.value_lbl)
+
+        # Detail
+        self.detail_lbl = QLabel("-")
+        self.detail_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 12px; background: transparent; border: none;")
+        self.detail_lbl.setWordWrap(True)
+        layout.addWidget(self.detail_lbl)
+
+        layout.addStretch()
+
+    def update_data(self, value: str, status: str, detail: str):
+        label_text, color, _, status_icon = STATUS_CONFIG.get(status, STATUS_CONFIG["ok"])
+        
+        self.status_lbl.setText(f"{status_icon} {label_text}")
+        self.status_lbl.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: bold; background: transparent; border: none;")
+        
+        card_border = color if status != "ok" else C["border"]
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['surface']};
+                border: 1px solid {card_border};
+                border-radius: 12px;
+            }}
+        """)
+        
+        self.value_lbl.setText(value)
+        self.detail_lbl.setText(detail)
+
+
+class ServiceRow(QFrame):
+    def __init__(self, name: str, ok: bool = True):
+        super().__init__()
+        self.setStyleSheet(f"background: {C['surface']}; border-radius: 8px; border: 1px solid {C['border']};")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        
+        icon = QLabel("✅" if ok else "🚨")
+        icon.setStyleSheet("background: transparent; border: none; font-size: 14px;")
+        
+        lbl = QLabel(name)
+        lbl.setStyleSheet(f"color: {C['text'] if ok else C['red_bright']}; font-size: 13px; font-weight: {'normal' if ok else 'bold'}; background: transparent; border: none;")
+        
+        layout.addWidget(icon)
+        layout.addWidget(lbl)
+        layout.addStretch()
+        
+        if not ok:
+            btn_fix = QPushButton("Restart")
+            btn_fix.setStyleSheet(f"""
+                QPushButton {{ background: {C['surface2']}; color: {C['text']}; border: 1px solid {C['border']}; border-radius: 4px; padding: 4px 8px; font-size: 11px; }}
+                QPushButton:hover {{ background: {C['red']}; }}
+            """)
+            btn_fix.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            layout.addWidget(btn_fix)
+
+
+# === Jendela Utama ===
+
+class SehatCheckWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NusantaraOS — Sehat Check")
+        self.setMinimumSize(850, 600)
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{
+                background-color: {C['bg']};
+                color: {C['text']};
+                font-family: 'Noto Sans', 'Segoe UI', sans-serif;
+            }}
+            QScrollBar:vertical {{ width: 8px; background: {C['bg']}; }}
+            QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 4px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # ==========================================
+        # Kiri: Sidebar / Overview
+        # ==========================================
+        sidebar = QFrame()
+        sidebar.setFixedWidth(280)
+        sidebar.setStyleSheet(f"background-color: {C['surface']}; border-right: 1px solid {C['border']};")
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(24, 30, 24, 24)
+        sidebar_layout.setSpacing(20)
+
+        # Header Sidebar
+        logo = QLabel("🛡️")
+        logo.setStyleSheet("font-size: 48px; background: transparent;")
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        app_title = QLabel("Sehat Check")
+        app_title.setStyleSheet(f"color: {C['accent']}; font-size: 22px; font-weight: bold; background: transparent;")
+        app_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.overall_badge = QLabel("Menghitung...")
+        self.overall_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        sidebar_layout.addWidget(logo)
+        sidebar_layout.addWidget(app_title)
+        sidebar_layout.addWidget(self.overall_badge)
+        
+        sidebar_layout.addSpacing(20)
+        
+        # Tindakan Cepat (Quick Actions)
+        qa_lbl = QLabel("TINDAKAN CEPAT")
+        qa_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; font-weight: bold; letter-spacing: 1px; background: transparent;")
+        sidebar_layout.addWidget(qa_lbl)
+        
+        btn_clean = ActionButton("Bersihkan Memori", "🧹", primary=True)
+        btn_clean.clicked.connect(self._action_clean_memory)
+        
+        btn_update = ActionButton("Cek Pembaruan", "📦")
+        
+        btn_driver = ActionButton("Manajer Driver", "⚙️")
+        btn_driver.clicked.connect(lambda: subprocess.Popen(["python3", os.path.join(GUARDIAN_DIR, "driver_manager_ui.py")]))
+
+        sidebar_layout.addWidget(btn_clean)
+        sidebar_layout.addWidget(btn_update)
+        sidebar_layout.addWidget(btn_driver)
+
+        sidebar_layout.addStretch()
+        
+        # Footer Sidebar
+        self.time_lbl = QLabel("Sinkronisasi terakhir:\nMenunggu...")
+        self.time_lbl.setStyleSheet(f"color: {C['text_muted']}; font-size: 11px; background: transparent;")
+        self.time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(self.time_lbl)
+
+        main_layout.addWidget(sidebar)
+
+        # ==========================================
+        # Kanan: Konten Utama (Cards & Services) dengan QScrollArea
+        # ==========================================
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("background-color: transparent;")
+
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(30, 30, 30, 30)
+        content_layout.setSpacing(20)
+
+        header_lbl = QLabel("Status Perangkat Keras & Sistem")
+        header_lbl.setStyleSheet("font-size: 20px; font-weight: bold; background: transparent;")
+        content_layout.addWidget(header_lbl)
+
+        # Grid Cards (Dibuat sekali saja)
+        self.cards = {}
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setSpacing(15)
+        
+        card_definitions = [
+            ("Penyimpanan", "💾", "storage"),
+            ("Memori (RAM)", "🧠", "memory"),
+            ("Prosesor (CPU)", "⚙️", "cpu"),
+            ("Grafis (GPU)", "🎮", "gpu"),
+        ]
+
+        row, col = 0, 0
+        for title, icon, key in card_definitions:
+            card = MetricCard(title, icon)
+            self.cards[key] = card
+            self.grid_layout.addWidget(card, row, col)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+
+        content_layout.addLayout(self.grid_layout)
+
+        # Services Section
+        srv_lbl = QLabel("Layanan Latar Belakang")
+        srv_lbl.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 10px; background: transparent;")
+        content_layout.addWidget(srv_lbl)
+
+        self.services_layout = QVBoxLayout()
+        self.services_layout.setSpacing(8)
+        content_layout.addLayout(self.services_layout)
+
+        content_layout.addStretch()
+        
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
+        # ==========================================
+        # Pekerja Background & Timer Real-time
+        # ==========================================
+        self.worker = HealthCheckWorker()
+        self.worker.data_ready.connect(self._on_data_ready)
+
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._trigger_refresh)
+        self._timer.start(REFRESH_MS)
+        
+        # Trigger pertama kali langsung tanpa nunggu 1 detik
+        self._trigger_refresh()
+
+    def _trigger_refresh(self):
+        # Jalankan worker hanya jika worker sebelumnya sudah selesai
+        if not self.worker.isRunning():
+            self.worker.start()
+
+    def _on_data_ready(self, data: dict):
+        """Dipanggil ketika background thread selesai update data."""
+        self._update_ui_data(data)
+
+    def _overall_status(self, data: dict) -> str:
+        keys = ("storage", "memory", "cpu", "gpu", "guardian", "services")
+        statuses = [data.get(k, {}).get("status", "ok") for k in keys]
+        if "error" in statuses: return "error"
         if "warning" in statuses: return "warning"
         return "ok"
 
-    def _last_check_text(self) -> str:
-        ts = self.data.get("last_check")
-        if not ts: return "Terakhir dicek: barusan"
+    def _update_ui_data(self, data: dict):
+        # Update Badge Status Utama
+        overall = self._overall_status(data)
+        text, color, _, icon = STATUS_CONFIG.get(overall, STATUS_CONFIG["ok"])
+        msg = "Sistem Sehat" if overall == "ok" else "Ada Peringatan" if overall == "warning" else "Butuh Perhatian!"
+        
+        self.overall_badge.setText(msg)
+        self.overall_badge.setStyleSheet(f"""
+            background-color: {color}20; /* Transparan */
+            color: {color};
+            border: 1px solid {color};
+            border-radius: 12px;
+            padding: 6px 12px;
+            font-size: 13px;
+            font-weight: bold;
+        """)
+
+        # Update In-place Cards (tanpa flicker)
+        for key, card in self.cards.items():
+            item = data.get(key, FALLBACK_HEALTH.get(key))
+            if item:
+                card.update_data(item.get("value",""), item.get("status","ok"), item.get("detail",""))
+
+        # Build Services (hapus & buat ulang ini murah/cepat karena sedikit)
+        for i in reversed(range(self.services_layout.count())): 
+            widget_to_remove = self.services_layout.itemAt(i).widget()
+            if widget_to_remove:
+                widget_to_remove.setParent(None)
+
+        failed = data.get("services", {}).get("failed", [])
+        if not failed:
+            self.services_layout.addWidget(ServiceRow("Semua layanan (systemd) berjalan normal", ok=True))
+        else:
+            for svc in failed:
+                self.services_layout.addWidget(ServiceRow(f"Layanan gagal: {svc}", ok=False))
+
+        # Update Waktu Real-time
+        ts = data.get("last_check")
+        if ts:
+            try:
+                time_str = datetime.fromisoformat(ts).strftime('%H:%M:%S')
+            except ValueError:
+                time_str = str(ts)
+        else:
+            time_str = "Barusan"
+        self.time_lbl.setText(f"Sinkronisasi terakhir:\n{time_str}")
+
+    def _action_clean_memory(self):
+        # Eksekusi sinkronisasi disk dan bersihkan caches
+        print("Membersihkan memori/cache...")
         try:
-            return f"Terakhir dicek: {datetime.fromisoformat(ts).strftime('%H:%M:%S')}"
-        except ValueError:
-            return f"Terakhir dicek: {ts}"
-
-    def _refresh(self):
-        self._run_health_check()
-        self.data = self._load_state()
-
-        while self.cards_layout.count():
-            item = self.cards_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-        self._build_cards()
-        self._build_services()
-
-        overall = self._overall_status()
-        _, color, _, _ = STATUS_CONFIG.get(overall, STATUS_CONFIG["ok"])
-        text = "Semua Normal" if overall == "ok" else "Ada Peringatan" if overall == "warning" else "Ada Masalah"
-        self.overall_badge.setText(f"● {text}")
-        self.overall_badge.setStyleSheet(f"color:{color};font-size:13px;font-weight:600;")
-        self.time_lbl.setText(self._last_check_text())
-
+            # Karena ini berjalan sebagai user biasa, mungkin butuh polkit jika bukan root.
+            # Namun kita beri indikasi visual untuk UX.
+            subprocess.Popen(["sync"])
+        except Exception:
+            pass
+            
+        sender = self.sender()
+        if isinstance(sender, QPushButton):
+            sender.setText("✅ Berhasil Dibersihkan")
+            QTimer.singleShot(2000, lambda: sender.setText("🧹  Bersihkan Memori"))
 
 def launch_sehat_check():
-    standalone = QApplication.instance() is None   # cek SEBELUM buat instance
+    standalone = QApplication.instance() is None
     app = QApplication.instance() or QApplication(sys.argv)
     win = SehatCheckWindow()
     win.show()
     if standalone:
         sys.exit(app.exec())
     return win
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

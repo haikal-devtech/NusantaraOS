@@ -226,6 +226,7 @@ python3 /usr/lib/nusantara/guardian/welcome_screen.py --force
 | 11 Apr 2026 | 5 KDE color schemes Indonesia-inspired |
 | 11 Apr 2026 | .desktop files semua GUI — muncul di app launcher |
 | 11 Apr 2026 | Floating dock + Papirus Dark + wallpaper Jakarta Pusat |
+| 24 Apr 2026 | **Redesign Sehat Check UI** — Modern Batik Dark Mode, Real-time update via QThread, & Tindakan Cepat |
 
 ---
 
